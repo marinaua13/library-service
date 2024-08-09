@@ -1,7 +1,7 @@
 from rest_framework import viewsets, status
 from rest_framework.generics import get_object_or_404
 from rest_framework.permissions import IsAuthenticated, AllowAny
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, action
 from rest_framework.response import Response
 from django.urls import reverse
 from django.conf import settings
@@ -16,7 +16,7 @@ from .serializers import PaymentSerializer
 from django.http import HttpResponse
 import stripe
 
-from .service import calculate_total_price
+from .service import calculate_total_price, create_payment_session
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
 endpoint_secret = settings.STRIPE_WEBHOOK_KEY
@@ -45,49 +45,44 @@ class PaymentViewSet(viewsets.ModelViewSet):
             status__in=[Payment.StatusChoices.PENDING],
         )
 
+    @action(detail=False, methods=["post"])
+    def cancel(self, request):
+        session_id = request.data.get("session_id")
+
+        if not session_id:
+            return Response(
+                {"error": "Missing session_id parameter."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            payment = Payment.objects.get(session_id=session_id)
+            payment.status = Payment.StatusChoices.PENDING
+            payment.save()
+            return Response(
+                {"message": "Payment was canceled"}, status=status.HTTP_200_OK
+            )
+        except Payment.DoesNotExist:
+            return Response(
+                {"error": "Payment not found"}, status=status.HTTP_404_NOT_FOUND
+            )
+
 
 class CreatePaymentSessionView(APIView):
     def post(self, request, pk):
         borrowing = get_object_or_404(Borrowing, pk=pk)
         money_to_pay = calculate_total_price(borrowing)
 
-        success_url = (
-            request.build_absolute_uri(reverse("payments:payment_success"))
-            + "?session_id={CHECKOUT_SESSION_ID}"
-        )
-        cancel_url = (
-            request.build_absolute_uri(reverse("payments:payment_cancel"))
-            + "?session_id={CHECKOUT_SESSION_ID}"
-        )
-
         try:
-            checkout_session = stripe.checkout.Session.create(
-                payment_method_types=["card"],
-                line_items=[
-                    {
-                        "price_data": {
-                            "currency": "usd",
-                            "product_data": {
-                                "name": f"Payment for Borrowing {borrowing.id}",
-                            },
-                            "unit_amount": int(money_to_pay * 100),
-                        },
-                        "quantity": 1,
-                    }
-                ],
-                mode="payment",
-                success_url=success_url,
-                cancel_url=cancel_url,
-            )
-            payment = Payment.objects.create(
-                status=Payment.StatusChoices.PENDING,
-                type=Payment.TypeChoices.PAYMENT,
-                session_url=checkout_session.url,
-                session_id=checkout_session.id,
-                money_to_pay=money_to_pay,
+            # Call the service function to create the payment session
+            checkout_session = create_payment_session(
                 borrowing=borrowing,
+                amount=money_to_pay,
+                payment_type=Payment.TypeChoices.PAYMENT,
+                request=request,
             )
 
+            # Now `checkout_session` contains the session information returned by Stripe
             return Response({"session_id": checkout_session.id})
         except stripe.error.StripeError as e:
             return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)

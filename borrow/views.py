@@ -15,7 +15,7 @@ from borrow.serializers import (
 )
 from borrow.telegram_utils import send_telegram_message
 from payment.models import Payment
-from payment.service import calculate_fine
+from payment.service import calculate_fine, create_payment_session
 from payment.views import CreatePaymentSessionView
 
 
@@ -53,6 +53,13 @@ class BorrowingViewSet(viewsets.ModelViewSet):
             raise ValidationError(
                 "You already have an active borrowing. Please return the current book before borrowing a new one."
             )
+        book = serializer.validated_data["book"]
+        if book.inventory <= 0:
+            raise ValidationError("The book is currently out of stock.")
+
+        book.inventory -= 1
+        book.save()
+
         instance = serializer.save(user=user)
         message = f"New borrowing created:\nUser: {instance.user.id}\nUser: {instance.user.email}\nBook: {instance.book.title}"
         result = send_telegram_message(message)
@@ -71,34 +78,33 @@ class BorrowingViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["post"])
     def return_book(self, request, pk=None):
         borrowing = self.get_object()
-        if borrowing.actual_return_date is not None:
-            return Response(
-                {"error": "This book has already been returned."},
-                status=status.HTTP_400_BAD_REQUEST,
+
+        # Set the actual return date
+        borrowing.actual_return_date = timezone.now().date()
+        borrowing.save()
+
+        # Update the book inventory
+        borrowing.book.inventory += 1
+        borrowing.book.save()
+
+        # Calculate fine if the book is overdue
+        fine = calculate_fine(borrowing)
+        if fine > 0:
+            create_payment_session(
+                borrowing=borrowing,
+                amount=fine,
+                payment_type=Payment.TypeChoices.FINE,
+                request=request,
             )
 
-        data = {"actual_return_date": timezone.now().date()}
-        serializer = self.get_serializer(borrowing, data=data, partial=True)
+            return Response(
+                {
+                    "message": f"A fine of {fine} USD has been applied. Please pay using the provided session."
+                },
+                status=status.HTTP_200_OK,
+            )
 
-        if serializer.is_valid():
-            serializer.save()
-            borrowing.book.inventory += 1
-            borrowing.book.save()
-
-            # Calculating Fine
-            fine = calculate_fine(borrowing)
-            if fine > 0:
-                Payment.objects.create(
-                    borrowing=borrowing,
-                    status=Payment.StatusChoices.PENDING,
-                    type=Payment.TypeChoices.FINE,
-                    # session_url="",  # Створіть сесію Stripe для штрафу, якщо потрібно
-                    # session_id="",  # Створіть сесію Stripe для штрафу, якщо потрібно
-                    money_to_pay=fine,
-                )
-
-                message = f"Book '{borrowing.book.title}' has been returned by {borrowing.user.email}. A fine of ${fine} has been issued for overdue."
-                send_telegram_message(message)
-
-            return Response(serializer.data, status=status.HTTP_200_OK)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            # Return success message if no fine is due
+        return Response(
+            {"message": "Book returned successfully."}, status=status.HTTP_200_OK
+        )
