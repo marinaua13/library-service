@@ -3,7 +3,6 @@ from rest_framework.generics import get_object_or_404
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.decorators import api_view, permission_classes, action
 from rest_framework.response import Response
-from django.urls import reverse
 from django.conf import settings
 from rest_framework.views import APIView
 from django.views.decorators.csrf import csrf_exempt
@@ -146,80 +145,3 @@ class PaymentSuccessView(APIView):
             return Response(
                 {"error": "Payment not found"}, status=status.HTTP_404_NOT_FOUND
             )
-
-
-# class CreatePaymentSessionView(APIView):
-#     def post(self, request, pk):
-#         borrowing = get_object_or_404(Borrowing, pk=pk)
-#         money_to_pay = calculate_total_price(borrowing)
-#
-#         try:
-#             success_url = request.build_absolute_uri(reverse("payment_success"))
-#             cancel_url = request.build_absolute_uri(reverse("payment_cancel"))
-#
-#             checkout_session = stripe.checkout.Session.create(
-#                 payment_method_types=["card"],
-#                 line_items=[
-#                     {
-#                         "price_data": {
-#                             "currency": "usd",
-#                             "product_data": {
-#                                 "name": f"Payment for Borrowing {borrowing.id}",
-#                             },
-#                             "unit_amount": int(money_to_pay * 100),
-#                         },
-#                         "quantity": 1,
-#                     }
-#                 ],
-#                 mode="payment",
-#                 success_url=f"{success_url}?session_id={{CHECKOUT_SESSION_ID}}",
-#                 cancel_url=f"{cancel_url}?session_id={{CHECKOUT_SESSION_ID}}",
-#             )
-#
-#             payment = Payment.objects.create(
-#                 status=Payment.StatusChoices.PENDING,
-#                 type=Payment.TypeChoices.PAYMENT,
-#                 session_url=checkout_session.url,
-#                 session_id=checkout_session.id,
-#                 money_to_pay=money_to_pay,
-#                 borrowing=borrowing,
-#             )
-#
-#             return Response({"session_id": checkout_session.id})
-#         except stripe.error.StripeError as e:
-#             return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
-#
-
-
-# @api_view(["POST"])
-# @permission_classes([AllowAny])
-# @csrf_exempt
-# def stripe_webhook(request):
-#     payload = request.body
-#     sig_header = request.META.get("HTTP_STRIPE_SIGNATURE")
-#     endpoint_secret = settings.STRIPE_WEBHOOK_KEY
-#
-#     try:
-#         event = stripe.Webhook.construct_event(payload, sig_header, endpoint_secret)
-#     except ValueError:
-#         return HttpResponse(status=400)
-#     except stripe.error.SignatureVerificationError:
-#         return HttpResponse(status=400)
-#
-#     # Process event
-#     if event["type"] == "checkout.session.completed":
-#         session = event["data"]["object"]
-#         session_id = session.get("id")
-#
-#         try:
-#             payment = Payment.objects.get(session_id=session_id)
-#             payment.status = Payment.StatusChoices.PAID
-#             payment.save()
-#
-#             # Return a response to Stripe to acknowledge receipt of the event
-#             return HttpResponse(status=200)
-#
-#         except Payment.DoesNotExist:
-#             return HttpResponse(status=404)
-#
-#     return HttpResponse(status=200)
