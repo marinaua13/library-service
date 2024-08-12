@@ -1,4 +1,4 @@
-from rest_framework import viewsets, permissions
+from rest_framework import viewsets
 
 from book.models import Book
 from book.permisions import IsAdminOrIfAuthenticatedReadOnly

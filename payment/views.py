@@ -81,7 +81,6 @@ class CreatePaymentSessionView(APIView):
                 request=request,
             )
 
-            # Now `checkout_session` contains the session information returned by Stripe
             return Response({"session_id": checkout_session.id})
         except stripe.error.StripeError as e:
             return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
